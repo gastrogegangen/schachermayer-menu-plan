@@ -5,14 +5,21 @@ on:
   schedule:
     - cron: '0 5 * * 1-5'  # Weekdays at 05:00 UTC
 
+concurrency:
+  group: pdf_to_png
+  cancel-in-progress: true
+
 jobs:
   pdf_to_png:
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Checkout
+      - name: Checkout (full history so we can rebase)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
 
       - name: Install tools
         run: |
@@ -46,14 +53,27 @@ jobs:
           name: menu-png
           path: docs/menu.png
 
-      - name: Commit PNG if changed
+      - name: Pull/rebase and push PNG if changed
+        env:
+          BRANCH_NAME: ${{ github.ref_name }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Stage only the final PNG
           git add -A docs/menu.png
+
+          # If nothing changed, exit early
           if git diff --cached --quiet; then
             echo "No changes to docs/menu.png"
             exit 0
           fi
+
+          # Make sure we're up to date with remote before pushing
+          git fetch origin "$BRANCH_NAME"
+          # Rebase our commit on top of the latest remote to avoid 'fetch first' errors
+          git pull --rebase origin "$BRANCH_NAME" || true
+
           git commit -m "chore: update menu.png from latest PDF [skip ci]" || true
-          git push
+          # Use a safe push; if something raced, the next run will succeed
+          git push origin HEAD:"$BRANCH_NAME"
