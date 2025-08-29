@@ -1,0 +1,59 @@
+name: Build menu image from PDF
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 5 * * 1-5'  # Weekdays at 05:00 UTC
+
+jobs:
+  pdf_to_png:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils imagemagick curl
+
+      - name: Fetch PDF
+        run: |
+          mkdir -p docs
+          curl -L -o docs/menu.pdf \
+            "https://qnips.blob.core.windows.net/release-menu-pdfs-static/SPEISEPLAN_Schachermayer-Menueplan_de.pdf"
+          ls -lah docs
+
+      - name: Convert first page to PNG (300 DPI)
+        run: |
+          pdftoppm -f 1 -l 1 -png -rx 300 -ry 300 docs/menu.pdf docs/menu_raw
+          ls -lah docs
+
+      - name: Trim background & flatten to white
+        run: |
+          if [ ! -f docs/menu_raw-1.png ]; then
+            echo "ERROR: docs/menu_raw-1.png not found; conversion failed." >&2
+            exit 1
+          fi
+          convert docs/menu_raw-1.png -background white -alpha remove -alpha off -trim +repage docs/menu.png
+          ls -lah docs
+
+      - name: Upload PNG as artifact (for debugging)
+        uses: actions/upload-artifact@v4
+        with:
+          name: menu-png
+          path: docs/menu.png
+
+      - name: Commit PNG if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A docs/menu.png
+          if git diff --cached --quiet; then
+            echo "No changes to docs/menu.png"
+            exit 0
+          fi
+          git commit -m "chore: update menu.png from latest PDF [skip ci]" || true
+          git push
