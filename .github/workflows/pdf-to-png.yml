@@ -15,8 +15,10 @@ jobs:
     permissions:
       contents: write
     env:
-      PDF_URL: "https://qnips.blob.core.windows.net/release-menu-pdfs-static/SPEISEPLAN_Schachermayer-Menueplan_de.pdf"
-      # Use the repository default branch for scheduled/manual runs
+      # Try both spellings; provider might swap between them.
+      PDF_URLS: |
+        https://qnips.blob.core.windows.net/release-menu-pdfs-static/SPEISEPLAN_Schachermayer-Menueplan_de.pdf
+        https://qnips.blob.core.windows.net/release-menu-pdfs-static/SPEISEPLAN_Schachermayer-Men%C3%BCplan_de.pdf
       BRANCH_NAME: ${{ github.event.repository.default_branch }}
     steps:
       - name: Checkout (full history so we can rebase)
@@ -28,13 +30,34 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y poppler-utils imagemagick curl coreutils
+          sudo apt-get install -y poppler-utils imagemagick curl coreutils file
 
-      - name: Fetch latest PDF
+      - name: Fetch latest PDF (try candidates, bypass cache)
         run: |
           mkdir -p docs
-          curl -fsSL -o docs/menu.pdf "$PDF_URL"
+          ok=""
+          for u in $PDF_URLS; do
+            url="${u}?nocache=$(date +%s)"
+            echo "Trying: $u"
+            if curl -fsSL -H 'Cache-Control: no-cache' -o docs/menu.pdf "$url"; then
+              # Verify it's a real PDF
+              if pdfinfo docs/menu.pdf >/dev/null 2>&1; then
+                echo "Fetched PDF from: $u" | tee docs/source_url.txt
+                ok="yes"
+                break
+              fi
+            fi
+          done
+          if [ -z "$ok" ]; then
+            echo "ERROR: Could not fetch any candidate URL." >&2
+            exit 1
+          fi
           ls -lah docs
+
+      - name: Log detected calendar week (from page 1)
+        run: |
+          KW=$(pdftotext -f 1 -l 1 docs/menu.pdf - | grep -oE 'KW[0-9]+' | head -n 1 || true)
+          echo "Detected calendar week in PDF: ${KW:-unknown}"
 
       - name: Compute PDF hash & compare
         id: hash
@@ -78,9 +101,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Commit both the current PDF and the generated PNG (plus hash)
-          git add -A docs/menu.pdf docs/menu.png docs/menu.sha256
-
+          git add -A docs/menu.pdf docs/menu.png docs/menu.sha256 docs/source_url.txt
           if git diff --cached --quiet; then
             echo "Nothing to commit"
             exit 0
