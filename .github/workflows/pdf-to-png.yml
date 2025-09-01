@@ -16,7 +16,8 @@ jobs:
       contents: write
     env:
       PDF_URL: "https://qnips.blob.core.windows.net/release-menu-pdfs-static/SPEISEPLAN_Schachermayer-Menueplan_de.pdf"
-      BRANCH_NAME: ${{ github.ref_name }}
+      # Use the repository default branch for scheduled/manual runs
+      BRANCH_NAME: ${{ github.event.repository.default_branch }}
     steps:
       - name: Checkout (full history so we can rebase)
         uses: actions/checkout@v4
@@ -55,7 +56,6 @@ jobs:
             echo "ERROR: docs/menu_raw-1.png not found; conversion failed." >&2
             exit 1
           fi
-          # Keep the full page, center on white canvas sized for a 1920x1080 landscape TV
           convert docs/menu_raw-1.png \
             -background white -alpha remove -alpha off \
             -resize 1920x1080 \
@@ -78,7 +78,9 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add -A docs/menu.png docs/menu.sha256
+          # Commit both the current PDF and the generated PNG (plus hash)
+          git add -A docs/menu.pdf docs/menu.png docs/menu.sha256
+
           if git diff --cached --quiet; then
             echo "Nothing to commit"
             exit 0
@@ -87,5 +89,5 @@ jobs:
           git fetch origin "$BRANCH_NAME"
           git pull --rebase origin "$BRANCH_NAME" || true
 
-          git commit -m "chore: update menu.png from latest PDF [skip ci]" || true
+          git commit -m "chore: update menu from latest PDF [skip ci]" || true
           git push origin HEAD:"$BRANCH_NAME"
