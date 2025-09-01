@@ -1,9 +1,9 @@
-name: Build menu image from PDF
+name: Build menu image from PDF (auto)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 5 * * 1-5'  # Weekdays at 05:00 UTC
+    - cron: '*/30 * * * *' # every 30 minutes; adjust as needed
 
 concurrency:
   group: pdf_to_png
@@ -14,6 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      PDF_URL: "https://qnips.blob.core.windows.net/release-menu-pdfs-static/SPEISEPLAN_Schachermayer-Menueplan_de.pdf"
+      BRANCH_NAME: ${{ github.ref_name }}
     steps:
       - name: Checkout (full history so we can rebase)
         uses: actions/checkout@v4
@@ -24,46 +27,60 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y poppler-utils imagemagick curl
+          sudo apt-get install -y poppler-utils imagemagick curl coreutils
 
-      - name: Fetch PDF
+      - name: Fetch latest PDF
         run: |
           mkdir -p docs
-          curl -L -o docs/menu.pdf \
-            "https://qnips.blob.core.windows.net/release-menu-pdfs-static/SPEISEPLAN_Schachermayer-Menueplan_de.pdf"
+          curl -fsSL -o docs/menu.pdf "$PDF_URL"
           ls -lah docs
 
-      - name: Convert first page to PNG (no trim, fit to 1920x1080)
+      - name: Compute PDF hash & compare
+        id: hash
+        run: |
+          sha256sum docs/menu.pdf | awk '{print $1}' > docs/menu.sha256.new
+          if [ -f docs/menu.sha256 ]; then
+            if cmp -s docs/menu.sha256.new docs/menu.sha256; then
+              echo "changed=no" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          echo "changed=yes" >> $GITHUB_OUTPUT
+
+      - name: Convert first page to PNG (keep full page; fit 1920x1080)
+        if: steps.hash.outputs.changed == 'yes'
         run: |
           pdftoppm -f 1 -l 1 -png -rx 300 -ry 300 docs/menu.pdf docs/menu_raw
           if [ ! -f docs/menu_raw-1.png ]; then
             echo "ERROR: docs/menu_raw-1.png not found; conversion failed." >&2
             exit 1
           fi
-          # Keep the full page and resize/canvas it for a 1920x1080 TV screen
+          # Keep the full page, center on white canvas sized for a 1920x1080 landscape TV
           convert docs/menu_raw-1.png \
             -background white -alpha remove -alpha off \
             -resize 1920x1080 \
             -gravity center -extent 1920x1080 \
             docs/menu.png
+          rm -f docs/menu_raw-*.png
+          mv -f docs/menu.sha256.new docs/menu.sha256
           ls -lah docs
 
-      - name: Upload PNG as artifact (for debugging)
+      - name: Upload PNG as artifact (debug)
+        if: steps.hash.outputs.changed == 'yes'
         uses: actions/upload-artifact@v4
         with:
           name: menu-png
           path: docs/menu.png
 
-      - name: Pull/rebase and push PNG if changed
-        env:
-          BRANCH_NAME: ${{ github.ref_name }}
+      - name: Pull/rebase and push files if changed
+        if: steps.hash.outputs.changed == 'yes'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add -A docs/menu.png
+          git add -A docs/menu.png docs/menu.sha256
           if git diff --cached --quiet; then
-            echo "No changes to docs/menu.png"
+            echo "Nothing to commit"
             exit 0
           fi
 
